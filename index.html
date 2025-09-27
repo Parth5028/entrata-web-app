@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Entrata Webhooks Viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@7.0.5/dist/browser/signalr.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f6f8;
+            padding: 2rem;
+        }
+        h1 {
+            color: #12334e;
+        }
+        #output {
+            margin-top: 2rem;
+            padding: 1rem;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>📡 Entrata Webhook Feed</h1>
+    <div id="output">Waiting for webhook messages...</div>
+
+    <script>
+        async function startSignalR() {
+            try {
+                // Negotiate with Azure Function
+                const negotiateResponse = await fetch('https://entratawebhookv2.azurewebsites.net/api/negotiate', {
+                    method: 'POST'
+                });
+
+                const negotiateData = await negotiateResponse.json();
+
+                // Build SignalR connection
+                const connection = new signalR.HubConnectionBuilder()
+                    .withUrl(negotiateData.url, {
+                        accessTokenFactory: () => negotiateData.accessToken
+                    })
+                    .configureLogging(signalR.LogLevel.Information)
+                    .build();
+
+                // Handle incoming webhook events
+                connection.on('newWebhookEvent', (data) => {
+                    console.log('📩 Webhook received:', data);
+                    const outputDiv = document.getElementById("output");
+                    const formatted = JSON.stringify(data, null, 2);
+                    outputDiv.innerHTML += `<pre>${formatted}</pre>`;
+                });
+
+                await connection.start();
+                console.log('✅ Connected to SignalR');
+            } catch (err) {
+                console.error('❌ SignalR error:', err);
+                document.getElementById("output").innerText = "❌ Failed to connect to SignalR.";
+            }
+        }
+
+        startSignalR();
+    </script>
+</body>
+</html>
