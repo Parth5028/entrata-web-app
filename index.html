@@ -28,46 +28,56 @@
     <h1>📡 Entrata Webhook Feed</h1>
     <div id="output">⏳ Connecting to SignalR...</div>
 
-    <script>
-        async function startSignalR() {
-            const outputDiv = document.getElementById("output");
+<script>
+    async function startSignalR() {
+        const outputDiv = document.getElementById("output");
 
-            try {
-                const negotiateResponse = await fetch('https://entratawebhookv2.azurewebsites.net/api/negotiate', {
-                    method: 'POST'
-                });
+        try {
+            const negotiateResponse = await fetch('https://entratawebhookv2.azurewebsites.net/api/negotiate', {
+                method: 'POST'
+            });
 
-                const negotiateData = await negotiateResponse.json();
-                console.log('📡 Negotiation response:', negotiateData);
+            console.log("🔍 Raw negotiate response:", negotiateResponse);
 
-                if (!negotiateData.url || !negotiateData.accessToken) {
-                    throw new Error('Missing connection info in negotiation response');
-                }
+            const text = await negotiateResponse.text();  // <== capture raw body as string
+            console.log("📄 Raw response body:", text);
 
-                const connection = new signalR.HubConnectionBuilder()
-                    .withUrl(negotiateData.url, {
-                        accessTokenFactory: () => negotiateData.accessToken
-                    })
-                    .configureLogging(signalR.LogLevel.Information)
-                    .build();
-
-                connection.on('newWebhookEvent', (data) => {
-                    console.log('📩 Webhook received:', data);
-                    const formatted = JSON.stringify(data, null, 2);
-                    outputDiv.innerHTML += `<pre>${formatted}</pre>`;
-                });
-
-                await connection.start();
-                console.log('✅ Connected to SignalR');
-                outputDiv.innerText = '✅ Connected to SignalR. Waiting for webhook messages...';
-
-            } catch (err) {
-                console.error('❌ SignalR error:', err);
-                outputDiv.innerText = '❌ Failed to connect to SignalR.';
+            if (!text || text.trim() === "") {
+                throw new Error('Negotiation response was empty');
             }
-        }
 
-        startSignalR();
-    </script>
+            const negotiateData = JSON.parse(text);  // <== safely parse string into JSON
+            console.log('📡 Parsed negotiation response:', negotiateData);
+
+            if (!negotiateData.url || !negotiateData.accessToken) {
+                throw new Error('Missing connection info in negotiation response');
+            }
+
+            const connection = new signalR.HubConnectionBuilder()
+                .withUrl(negotiateData.url, {
+                    accessTokenFactory: () => negotiateData.accessToken
+                })
+                .configureLogging(signalR.LogLevel.Information)
+                .build();
+
+            connection.on('newWebhookEvent', (data) => {
+                console.log('📩 Webhook received:', data);
+                const formatted = JSON.stringify(data, null, 2);
+                outputDiv.innerHTML += `<pre>${formatted}</pre>`;
+            });
+
+            await connection.start();
+            console.log('✅ Connected to SignalR');
+            outputDiv.innerText = '✅ Connected to SignalR. Waiting for webhook messages...';
+
+        } catch (err) {
+            console.error('❌ SignalR error:', err);
+            outputDiv.innerText = '❌ Failed to connect to SignalR.';
+        }
+    }
+
+    startSignalR();
+</script>
+
 </body>
 </html>
