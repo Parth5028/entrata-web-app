@@ -26,19 +26,24 @@
 </head>
 <body>
     <h1>📡 Entrata Webhook Feed</h1>
-    <div id="output">Waiting for webhook messages...</div>
+    <div id="output">⏳ Connecting to SignalR...</div>
 
     <script>
         async function startSignalR() {
+            const outputDiv = document.getElementById("output");
+
             try {
-                // Negotiate with Azure Function
                 const negotiateResponse = await fetch('https://entratawebhookv2.azurewebsites.net/api/negotiate', {
                     method: 'POST'
                 });
 
                 const negotiateData = await negotiateResponse.json();
+                console.log('📡 Negotiation response:', negotiateData);
 
-                // Build SignalR connection
+                if (!negotiateData.url || !negotiateData.accessToken) {
+                    throw new Error('Missing connection info in negotiation response');
+                }
+
                 const connection = new signalR.HubConnectionBuilder()
                     .withUrl(negotiateData.url, {
                         accessTokenFactory: () => negotiateData.accessToken
@@ -46,19 +51,19 @@
                     .configureLogging(signalR.LogLevel.Information)
                     .build();
 
-                // Handle incoming webhook events
                 connection.on('newWebhookEvent', (data) => {
                     console.log('📩 Webhook received:', data);
-                    const outputDiv = document.getElementById("output");
                     const formatted = JSON.stringify(data, null, 2);
                     outputDiv.innerHTML += `<pre>${formatted}</pre>`;
                 });
 
                 await connection.start();
                 console.log('✅ Connected to SignalR');
+                outputDiv.innerText = '✅ Connected to SignalR. Waiting for webhook messages...';
+
             } catch (err) {
                 console.error('❌ SignalR error:', err);
-                document.getElementById("output").innerText = "❌ Failed to connect to SignalR.";
+                outputDiv.innerText = '❌ Failed to connect to SignalR.';
             }
         }
 
