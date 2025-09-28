@@ -2,57 +2,81 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Entrata Webhooks Viewer</title>
+    <title>Entrata Webhooks Diagnostic Viewer</title>
     <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@7.0.5/dist/browser/signalr.min.js"></script>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f6f8;
-            padding: 2rem;
-        }
-        h1 {
-            color: #12334e;
-        }
-        #output {
-            margin-top: 2rem;
-            padding: 1rem;
-            background-color: #ffffff;
-            border-radius: 8px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-            white-space: pre-wrap;
-            font-family: monospace;
-        }
+        body { font-family: Arial, sans-serif; background-color: #f4f6f8; padding: 2rem; }
+        h1 { color: #12334e; }
+        #status-bar { margin-top: 1rem; padding: 0.5rem; border-radius: 6px; display: inline-block; font-weight: bold; }
+        .ok { background: #c6f6d5; color: #22543d; }
+        .warn { background: #fefcbf; color: #744210; }
+        .error { background: #fed7d7; color: #742a2a; }
+        #logs { margin-top: 2rem; padding: 1rem; background: #fff; border-radius: 8px;
+                box-shadow: 0 0 10px rgba(0,0,0,0.1); white-space: pre-wrap;
+                font-family: monospace; height: 500px; overflow-y: auto; }
+        .log-entry { margin: 0.25rem 0; }
+        .info { color: #12334e; }
+        .success { color: green; }
+        .error-log { color: red; }
+        .data { color: #555; }
     </style>
 </head>
 <body>
-    <h1>📡 Entrata Webhook Feed</h1>
-    <div id="output">⏳ Connecting to SignalR...</div>
+    <h1>📡 Entrata Webhooks Diagnostic Viewer</h1>
+    <div>
+        Function App: <span id="func-status" class="warn">⏳ Checking...</span> |
+        SignalR: <span id="signalr-status" class="warn">⏳ Connecting...</span>
+    </div>
+    <div id="logs">⏳ Initializing...</div>
 
 <script>
+    const logsDiv = document.getElementById("logs");
+    const funcStatus = document.getElementById("func-status");
+    const signalrStatus = document.getElementById("signalr-status");
+
+    function log(message, type="info", data=null) {
+        const entry = document.createElement("div");
+        entry.classList.add("log-entry", type === "error" ? "error-log" : type);
+        let content = `📝 ${new Date().toLocaleTimeString()} - ${message}`;
+        if (data) {
+            content += "\n" + (typeof data === "string" ? data : JSON.stringify(data, null, 2));
+        }
+        entry.textContent = content;
+        logsDiv.appendChild(entry);
+        logsDiv.scrollTop = logsDiv.scrollHeight; // auto-scroll
+        console[type === "error" ? "error" : "log"](message, data || "");
+    }
+
+    // ====== Function App Health Check ======
+    async function checkFunctionApp() {
+        try {
+            const resp = await fetch("https://entratawebhookv2.azurewebsites.net/api/negotiate", { method: "POST" });
+            const text = await resp.text();
+            if (resp.ok && text.trim()) {
+                funcStatus.textContent = "✅ Healthy";
+                funcStatus.className = "ok";
+                log("Function App responded OK", "success", { status: resp.status, body: text });
+                return JSON.parse(text);
+            } else {
+                funcStatus.textContent = "⚠️ Unhealthy";
+                funcStatus.className = "warn";
+                log("Function App unhealthy response", "error", { status: resp.status, body: text });
+                return null;
+            }
+        } catch (err) {
+            funcStatus.textContent = "❌ Error";
+            funcStatus.className = "error";
+            log("Function App check failed", "error", err);
+            return null;
+        }
+    }
+
+    // ====== SignalR Setup ======
     async function startSignalR() {
-        const outputDiv = document.getElementById("output");
+        const negotiateData = await checkFunctionApp();
+        if (!negotiateData) return;
 
         try {
-            const negotiateResponse = await fetch('https://entratawebhookv2.azurewebsites.net/api/negotiate', {
-                method: 'POST'
-            });
-
-            console.log("🔍 Raw negotiate response:", negotiateResponse);
-
-            const text = await negotiateResponse.text();  // <== capture raw body as string
-            console.log("📄 Raw response body:", text);
-
-            if (!text || text.trim() === "") {
-                throw new Error('Negotiation response was empty');
-            }
-
-            const negotiateData = JSON.parse(text);  // <== safely parse string into JSON
-            console.log('📡 Parsed negotiation response:', negotiateData);
-
-            if (!negotiateData.url || !negotiateData.accessToken) {
-                throw new Error('Missing connection info in negotiation response');
-            }
-
             const connection = new signalR.HubConnectionBuilder()
                 .withUrl(negotiateData.url, {
                     accessTokenFactory: () => negotiateData.accessToken
@@ -60,24 +84,44 @@
                 .configureLogging(signalR.LogLevel.Information)
                 .build();
 
-            connection.on('newWebhookEvent', (data) => {
-                console.log('📩 Webhook received:', data);
-                const formatted = JSON.stringify(data, null, 2);
-                outputDiv.innerHTML += `<pre>${formatted}</pre>`;
+            connection.on("newWebhookEvent", (data) => {
+                log("📩 Webhook event received", "success", data);
             });
 
+            connection.onclose(err => {
+                signalrStatus.textContent = "❌ Disconnected";
+                signalrStatus.className = "error";
+                log("SignalR connection closed", "error", err);
+            });
+            connection.onreconnecting(err => {
+                signalrStatus.textContent = "⚠️ Reconnecting...";
+                signalrStatus.className = "warn";
+                log("SignalR reconnecting...", "error", err);
+            });
+            connection.onreconnected(id => {
+                signalrStatus.textContent = "✅ Reconnected";
+                signalrStatus.className = "ok";
+                log("SignalR reconnected", "success", { connectionId: id });
+            });
+
+            log("Starting SignalR connection...", "info");
             await connection.start();
-            console.log('✅ Connected to SignalR');
-            outputDiv.innerText = '✅ Connected to SignalR. Waiting for webhook messages...';
+            signalrStatus.textContent = "✅ Connected";
+            signalrStatus.className = "ok";
+            log("Connected to SignalR", "success");
 
         } catch (err) {
-            console.error('❌ SignalR error:', err);
-            outputDiv.innerText = '❌ Failed to connect to SignalR.';
+            signalrStatus.textContent = "❌ Error";
+            signalrStatus.className = "error";
+            log("SignalR start failed", "error", err);
         }
     }
 
+    // Start everything
     startSignalR();
-</script>
 
+    // Re-check Function App every 60s
+    setInterval(checkFunctionApp, 60000);
+</script>
 </body>
 </html>
