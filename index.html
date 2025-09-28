@@ -7,13 +7,14 @@
     <style>
         body { font-family: Arial, sans-serif; background-color: #f4f6f8; padding: 2rem; }
         h1 { color: #12334e; }
-        #status-bar { margin-top: 1rem; padding: 0.5rem; border-radius: 6px; display: inline-block; font-weight: bold; }
+        .status-line { margin: 0.5rem 0; }
+        .status-badge { padding: 0.3rem 0.6rem; border-radius: 6px; font-weight: bold; }
         .ok { background: #c6f6d5; color: #22543d; }
         .warn { background: #fefcbf; color: #744210; }
         .error { background: #fed7d7; color: #742a2a; }
         #logs { margin-top: 2rem; padding: 1rem; background: #fff; border-radius: 8px;
                 box-shadow: 0 0 10px rgba(0,0,0,0.1); white-space: pre-wrap;
-                font-family: monospace; height: 500px; overflow-y: auto; }
+                font-family: monospace; height: 600px; overflow-y: auto; }
         .log-entry { margin: 0.25rem 0; }
         .info { color: #12334e; }
         .success { color: green; }
@@ -23,15 +24,15 @@
 </head>
 <body>
     <h1>📡 Entrata Webhooks Diagnostic Viewer</h1>
-    <div>
-        Function App: <span id="func-status" class="warn">⏳ Checking...</span> |
-        SignalR: <span id="signalr-status" class="warn">⏳ Connecting...</span>
-    </div>
+    <div class="status-line">Function App (negotiate): <span id="negotiate-status" class="status-badge warn">⏳ Checking...</span></div>
+    <div class="status-line">Function App (webhook): <span id="webhook-status" class="status-badge warn">⏳ Checking...</span></div>
+    <div class="status-line">SignalR: <span id="signalr-status" class="status-badge warn">⏳ Connecting...</span></div>
     <div id="logs">⏳ Initializing...</div>
 
 <script>
     const logsDiv = document.getElementById("logs");
-    const funcStatus = document.getElementById("func-status");
+    const negotiateStatus = document.getElementById("negotiate-status");
+    const webhookStatus = document.getElementById("webhook-status");
     const signalrStatus = document.getElementById("signalr-status");
 
     function log(message, type="info", data=null) {
@@ -39,49 +40,62 @@
         entry.classList.add("log-entry", type === "error" ? "error-log" : type);
         let content = `📝 ${new Date().toLocaleTimeString()} - ${message}`;
         if (data) {
-            content += "\n" + (typeof data === "string" ? data : JSON.stringify(data, null, 2));
+            if (typeof data === "string") content += "\n" + data;
+            else content += "\n" + JSON.stringify(data, null, 2);
         }
         entry.textContent = content;
         logsDiv.appendChild(entry);
-        logsDiv.scrollTop = logsDiv.scrollHeight; // auto-scroll
+        logsDiv.scrollTop = logsDiv.scrollHeight;
         console[type === "error" ? "error" : "log"](message, data || "");
     }
 
-    // ====== Function App Health Check ======
-    async function checkFunctionApp() {
+    async function checkEndpoint(name, url, method="GET", statusEl) {
         try {
-            const resp = await fetch("https://entratawebhookv2.azurewebsites.net/api/negotiate", { method: "POST" });
+            log(`Checking ${name} endpoint: ${url}`, "info");
+            const resp = await fetch(url, { method });
             const text = await resp.text();
+            log(`${name} raw response`, "data", { status: resp.status, headers: [...resp.headers], body: text });
+
             if (resp.ok && text.trim()) {
-                funcStatus.textContent = "✅ Healthy";
-                funcStatus.className = "ok";
-                log("Function App responded OK", "success", { status: resp.status, body: text });
-                return JSON.parse(text);
+                statusEl.textContent = "✅ Healthy";
+                statusEl.className = "status-badge ok";
+                return { ok: true, body: text };
             } else {
-                funcStatus.textContent = "⚠️ Unhealthy";
-                funcStatus.className = "warn";
-                log("Function App unhealthy response", "error", { status: resp.status, body: text });
-                return null;
+                statusEl.textContent = "⚠️ Unhealthy";
+                statusEl.className = "status-badge warn";
+                return { ok: false, body: text };
             }
         } catch (err) {
-            funcStatus.textContent = "❌ Error";
-            funcStatus.className = "error";
-            log("Function App check failed", "error", err);
-            return null;
+            statusEl.textContent = "❌ Error";
+            statusEl.className = "status-badge error";
+            log(`${name} check failed`, "error", err);
+            return { ok: false, body: null };
         }
     }
 
-    // ====== SignalR Setup ======
     async function startSignalR() {
-        const negotiateData = await checkFunctionApp();
-        if (!negotiateData) return;
+        const negotiate = await checkEndpoint("Negotiate", "https://entratawebhookv2.azurewebsites.net/api/negotiate", "POST", negotiateStatus);
+        if (!negotiate.ok) return;
+
+        let negotiateData;
+        try {
+            negotiateData = JSON.parse(negotiate.body);
+        } catch (err) {
+            log("Failed to parse negotiate JSON", "error", { error: err, body: negotiate.body });
+            return;
+        }
+
+        if (!negotiateData.url || !negotiateData.accessToken) {
+            log("Negotiate response missing required fields", "error", negotiateData);
+            return;
+        }
 
         try {
             const connection = new signalR.HubConnectionBuilder()
                 .withUrl(negotiateData.url, {
                     accessTokenFactory: () => negotiateData.accessToken
                 })
-                .configureLogging(signalR.LogLevel.Information)
+                .configureLogging(signalR.LogLevel.Trace)
                 .build();
 
             connection.on("newWebhookEvent", (data) => {
@@ -90,38 +104,42 @@
 
             connection.onclose(err => {
                 signalrStatus.textContent = "❌ Disconnected";
-                signalrStatus.className = "error";
+                signalrStatus.className = "status-badge error";
                 log("SignalR connection closed", "error", err);
             });
             connection.onreconnecting(err => {
                 signalrStatus.textContent = "⚠️ Reconnecting...";
-                signalrStatus.className = "warn";
+                signalrStatus.className = "status-badge warn";
                 log("SignalR reconnecting...", "error", err);
             });
             connection.onreconnected(id => {
                 signalrStatus.textContent = "✅ Reconnected";
-                signalrStatus.className = "ok";
+                signalrStatus.className = "status-badge ok";
                 log("SignalR reconnected", "success", { connectionId: id });
             });
 
             log("Starting SignalR connection...", "info");
             await connection.start();
             signalrStatus.textContent = "✅ Connected";
-            signalrStatus.className = "ok";
-            log("Connected to SignalR", "success");
+            signalrStatus.className = "status-badge ok";
+            log("SignalR connected successfully", "success");
 
         } catch (err) {
             signalrStatus.textContent = "❌ Error";
-            signalrStatus.className = "error";
+            signalrStatus.className = "status-badge error";
             log("SignalR start failed", "error", err);
         }
     }
 
-    // Start everything
-    startSignalR();
+    async function runDiagnostics() {
+        await checkEndpoint("Webhook", "https://entratawebhookv2.azurewebsites.net/api/entratawhhttp", "GET", webhookStatus);
+        await startSignalR();
+    }
 
-    // Re-check Function App every 60s
-    setInterval(checkFunctionApp, 60000);
+    runDiagnostics();
+
+    // Repeat every 60 seconds
+    setInterval(runDiagnostics, 60000);
 </script>
 </body>
 </html>
