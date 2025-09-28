@@ -24,11 +24,15 @@
 </head>
 <body>
   <h1>📡 Entrata Webhooks Diagnostic Viewer</h1>
+  <div class="status-line">Function App (negotiate): <span id="negotiate-status" class="status-badge warn">⏳ Checking...</span></div>
+  <div class="status-line">Function App (webhook): <span id="webhook-status" class="status-badge warn">⏳ Checking...</span></div>
   <div class="status-line">SignalR: <span id="signalr-status" class="status-badge warn">⏳ Connecting...</span></div>
   <div id="logs">⏳ Initializing...</div>
 
 <script>
   const logsDiv = document.getElementById("logs");
+  const negotiateStatus = document.getElementById("negotiate-status");
+  const webhookStatus = document.getElementById("webhook-status");
   const signalrStatus = document.getElementById("signalr-status");
 
   function log(message, type="info", data=null) {
@@ -45,15 +49,49 @@
     console[type === "error" ? "error" : "log"](message, data || "");
   }
 
-  async function startSignalR() {
+  async function checkEndpoint(name, url, method="GET", statusEl) {
     try {
-      log("Fetching negotiate info...", "info");
-      const resp = await fetch("https://entratawebhookv2.azurewebsites.net/api/negotiate", { method: "POST" });
+      log(`Checking ${name} endpoint: ${url}`, "info");
+      const resp = await fetch(url, { method });
       const text = await resp.text();
-      log("Negotiate response", "data", text);
+      log(`${name} raw response`, "data", { status: resp.status, body: text });
 
-      const negotiateData = JSON.parse(text);
+      if (resp.ok && text.trim()) {
+        statusEl.textContent = "✅ Healthy";
+        statusEl.className = "status-badge ok";
+        return { ok: true, body: text };
+      } else {
+        statusEl.textContent = "⚠️ Unhealthy";
+        statusEl.className = "status-badge warn";
+        return { ok: false, body: text };
+      }
+    } catch (err) {
+      statusEl.textContent = "❌ Error";
+      statusEl.className = "status-badge error";
+      log(`${name} check failed`, "error", err);
+      return { ok: false, body: null };
+    }
+  }
 
+  async function startSignalR() {
+    const negotiate = await checkEndpoint("Negotiate", "https://entratawebhookv2.azurewebsites.net/api/negotiate", "POST", negotiateStatus);
+    if (!negotiate.ok) return;
+
+    let negotiateData;
+    try {
+      negotiateData = JSON.parse(negotiate.body);
+      log("Parsed negotiate data", "data", negotiateData);
+    } catch (err) {
+      log("Failed to parse negotiate JSON", "error", { error: err, body: negotiate.body });
+      return;
+    }
+
+    if (!negotiateData.url || !negotiateData.accessToken) {
+      log("Negotiate response missing required fields", "error", negotiateData);
+      return;
+    }
+
+    try {
       const connection = new signalR.HubConnectionBuilder()
         .withUrl(negotiateData.url, {
           accessTokenFactory: () => negotiateData.accessToken
@@ -94,7 +132,12 @@
     }
   }
 
-  startSignalR();
+  async function runDiagnostics() {
+    await checkEndpoint("Webhook", "https://entratawebhookv2.azurewebsites.net/api/entratawhhttp", "POST", webhookStatus);
+    await startSignalR();
+  }
+
+  runDiagnostics();
 </script>
 </body>
 </html>
