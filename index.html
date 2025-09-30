@@ -80,7 +80,8 @@
     let negotiateData;
     try {
       negotiateData = JSON.parse(negotiate.body);
-      log("Parsed negotiate data", "data", negotiateData);
+      const redacted = { ...negotiateData, accessToken: "***" };
+      log("Negotiation successful (token redacted)", "info", redacted);
     } catch (err) {
       log("Failed to parse negotiate JSON", "error", { error: err, body: negotiate.body });
       return;
